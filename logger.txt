@@ -1,0 +1,309 @@
+package com.cg.ibs.rm.dao;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.HashSet;
+import java.util.Set;
+import javax.persistence.EntityManager;
+import javax.persistence.TypedQuery;
+import org.apache.log4j.Logger;
+import com.cg.ibs.rm.bean.AccountBean;
+import com.cg.ibs.rm.bean.AutoPayment;
+import com.cg.ibs.rm.bean.CustomerBean;
+import com.cg.ibs.rm.bean.ServiceProvider;
+import com.cg.ibs.rm.bean.ServiceProviderId;
+import com.cg.ibs.rm.exception.ExceptionMessages;
+import com.cg.ibs.rm.exception.IBSExceptions;
+import com.cg.ibs.rm.util.JpaUtil;
+
+public class AutoPaymentDAOImpl implements AutoPaymentDAO {
+	EntityManager manager = JpaUtil.getEntityManger();
+	private static final Logger LOGGER = Logger.getLogger(AutoPaymentDAOImpl.class);
+
+	@Override
+	public Set<AutoPayment> getAutopaymentDetails(BigInteger uci) {
+		LOGGER.info("entered getAutopaymentDetails in AutoPaymentDAOImpl");
+		TypedQuery<AutoPayment> query = manager.createQuery(
+				"SELECT a FROM AutoPayment a  WHERE a.serviceProviderId.uci = ?1",
+				AutoPayment.class);
+		query.setParameter(1, uci);
+		return new HashSet<>(query.getResultList());
+	}
+
+	@Override
+	public boolean copyDetails(BigInteger uci, AutoPayment autoPayment) throws IBSExceptions {
+		LOGGER.info("entered copyDetails in AutoPaymentDAOImpl");
+		boolean result = false;
+		if (null == manager.find(AutoPayment.class, autoPayment.getServiceProviderId())) {
+			CustomerBean customerBean = manager.find(CustomerBean.class, uci);
+			customerBean.getAutoPayments().add(autoPayment);
+			manager.persist(autoPayment);// why not customer bean
+			result = true;
+		} else {
+			throw new IBSExceptions(ExceptionMessages.AUTOPAYMENT_ALREADY_ADDED);
+		}
+		return result;
+	}
+
+	@Override
+	public boolean deleteDetails(BigInteger uci, BigInteger spi) throws IBSExceptions {
+		boolean result = false;
+		LOGGER.info("entered deleteDetails in AutoPaymentDAOImpl");
+		AutoPayment autoPayment = manager.find(AutoPayment.class, new ServiceProviderId(spi, uci));
+		if (null != autoPayment) {
+			manager.remove(autoPayment);
+		} else {
+			throw new IBSExceptions(ExceptionMessages.AUTOPAYMENT_DOESNT_EXIST);
+		}
+		return result;
+	}
+
+	@Override
+	public Set<ServiceProvider> showServiceProviderList() {
+		LOGGER.info("entered showServiceProviderList in AutoPaymentDAOImpl");
+		TypedQuery<ServiceProvider> query = manager.createQuery("SELECT a FROM ServiceProvider a",
+				ServiceProvider.class);
+		return new HashSet<>(query.getResultList());
+	}
+
+	@Override
+	public BigDecimal getCurrentBalance(BigInteger accountNumber) throws IBSExceptions {
+		BigDecimal bigDecimal = null;
+		LOGGER.info("entered getCurrentBalance in AutoPaymentDAOImpl");
+		AccountBean account = manager.find(AccountBean.class, accountNumber);
+		if (null != account) {
+			bigDecimal = account.getBalance();
+		}
+		return bigDecimal;
+	}
+
+	@Override
+	public boolean setCurrentBalance(BigDecimal currentBalance, BigInteger accountNumber) {
+		LOGGER.info("entered setCurrentBalance in AutoPaymentDAOImpl");
+		boolean result = false;
+		AccountBean account = manager.find(AccountBean.class, accountNumber);
+		account.setBalance(currentBalance);
+		if (manager.merge(account) != null) {
+			result = true;
+		}
+		return result;
+	}
+}
+
+
+--------------------------------------------------------------------------
+package com.cg.ibs.rm.dao;
+
+import java.math.BigInteger;
+import java.util.HashSet;
+import java.util.Set;
+
+import javax.persistence.EntityManager;
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.CriteriaQuery;
+import javax.persistence.criteria.Join;
+import javax.persistence.criteria.Root;
+
+import org.apache.log4j.Logger;
+
+import com.cg.ibs.rm.bean.Beneficiary;
+import com.cg.ibs.rm.bean.CreditCard;
+import com.cg.ibs.rm.bean.CustomerBean;
+import com.cg.ibs.rm.exception.ExceptionMessages;
+import com.cg.ibs.rm.exception.IBSExceptions;
+import com.cg.ibs.rm.ui.Status;
+import com.cg.ibs.rm.util.JpaUtil;
+
+public class Bank_AdminDAOImpl implements Bank_AdminDAO {
+	private static Logger logger = Logger.getLogger(Bank_AdminDAOImpl.class);
+	EntityManager manager = JpaUtil.getEntityManger();
+
+	public Set<BigInteger> getRequests() {
+		logger.info("entering into getRequests method of BankRepresentativeDAOImpl class");
+		Set<BigInteger> ucis = new HashSet<>();
+		CriteriaBuilder builder = manager.getCriteriaBuilder();
+		CriteriaQuery<BigInteger> query = builder.createQuery(BigInteger.class);
+
+		Root<CustomerBean> custRoot = query.from(CustomerBean.class);
+		Join<CustomerBean, CreditCard> creditCards = custRoot.join("creditCards");
+		query.select(custRoot.<BigInteger>get("uci")).where(builder.equal(creditCards.get("cardStatus"), Status.PENDING));
+		ucis.addAll(new HashSet<BigInteger>(manager.createQuery(query).getResultList()));
+
+		CriteriaQuery<BigInteger> query2 = builder.createQuery(BigInteger.class);
+		Root<CustomerBean> custRoot2 = query2.from(CustomerBean.class);
+		Join<CustomerBean, Beneficiary> beneficiaries = custRoot2.join("beneficiaries");
+		query2.select(custRoot2.<BigInteger>get("uci")).where(builder.equal(beneficiaries.get("status"), Status.PENDING));
+		ucis.addAll(new HashSet<BigInteger>(manager.createQuery(query2).getResultList()));
+
+		return ucis;
+	}
+
+	public Set<CreditCard> getCreditCardDetails(BigInteger uci) {// credit cards list which goes to bank admin
+		logger.info("entering into getCreditCardDetails method of BankRepresentativeDAOImpl class");
+		CriteriaBuilder builder = manager.getCriteriaBuilder();
+		CriteriaQuery<CreditCard> query = builder.createQuery(CreditCard.class);
+		Root<CustomerBean> custRoot = query.from(CustomerBean.class);
+		Join<CustomerBean, CreditCard> unapprovedCreditCards = custRoot.join("creditCards");
+		query.select(unapprovedCreditCards).where(builder.and(builder.equal(custRoot.get("uci"), uci),
+				builder.equal(unapprovedCreditCards.get("cardStatus"), Status.PENDING)));
+		return new HashSet<>(manager.createQuery(query).getResultList());
+	}
+
+	public Set<Beneficiary> getBeneficiaryDetails(BigInteger uci) {// beneficiary list which goes to bank admin
+		logger.info("entering into getBeneficiaryDetails method of BankRepresentativeDAOImpl class");
+		CriteriaBuilder builder = manager.getCriteriaBuilder();
+		CriteriaQuery<Beneficiary> query = builder.createQuery(Beneficiary.class);
+		Root<CustomerBean> custRoot = query.from(CustomerBean.class);
+		Join<CustomerBean, Beneficiary> unapprovedBeneficiaries = custRoot.join("beneficiaries");
+		query.select(unapprovedBeneficiaries).where(builder.and(builder.equal(custRoot.get("uci"), uci),
+				builder.equal(unapprovedBeneficiaries.get("status"), Status.PENDING)));
+		return new HashSet<>(manager.createQuery(query).getResultList());
+	}
+
+	@Override
+	public boolean checkedCreditCardDetails(CreditCard card) throws IBSExceptions {//bank admin gives his approval/disapproval
+		logger.info("entering into copyCreditCardDetails method of BankRepresentativeDAOImpl class");
+		boolean check = false;
+		CreditCard cardCheck = manager.find(CreditCard.class, card.getCardNumber());
+		if ((cardCheck != null) && (cardCheck.getCardStatus().equals(Status.PENDING))) {
+			cardCheck.setCardStatus(Status.ACTIVE);
+			manager.merge(cardCheck);
+			check = true;
+		} else {
+			throw new IBSExceptions(ExceptionMessages.ERROR2);
+		}
+		return check;
+	}
+	
+	@Override
+	public boolean decliningCreditCardDetails(CreditCard card) throws IBSExceptions {//bank admin gives his approval/disapproval
+		logger.info("entering into copyCreditCardDetails method of BankRepresentativeDAOImpl class");
+		boolean check = false;
+		CreditCard cardCheck = manager.find(CreditCard.class, card.getCardNumber());
+		if ((cardCheck != null) && (cardCheck.getCardStatus().equals(Status.PENDING))) {
+			cardCheck.setCardStatus(Status.BLOCKED);
+			manager.merge(cardCheck);
+			check = true;
+		} else {
+			throw new IBSExceptions(ExceptionMessages.ERROR2);
+		}
+		return check;
+	}
+
+	@Override
+	public boolean checkedBeneficiaryDetails(Beneficiary beneficiary) throws IBSExceptions {//bank admin gives his approval/disapproval
+		logger.info("entering into copyBeneficiaryDetails method of BankRepresentativeDAOImpl class");
+		boolean result = false;
+		Beneficiary beneficiaryCheck = manager.find(Beneficiary.class, beneficiary.getAccountNumber());
+		if ((beneficiaryCheck != null) && (beneficiaryCheck.getStatus().equals(Status.PENDING))) {
+			beneficiaryCheck.setStatus(Status.ACTIVE);
+			manager.merge(beneficiaryCheck);
+			result = true;
+		} else {
+			throw new IBSExceptions(ExceptionMessages.BENEFICIARY_DOESNT_EXIST);
+		}
+		return result;
+	}
+	
+	@Override
+	public boolean decliningBeneficiaryDetails(Beneficiary beneficiary) throws IBSExceptions {//bank admin gives his approval/disapproval
+		logger.info("entering into copyCreditCardDetails method of BankRepresentativeDAOImpl class");
+		boolean result = false;
+		Beneficiary beneficiaryCheck = manager.find(Beneficiary.class, beneficiary.getAccountNumber());
+		if ((beneficiaryCheck != null) && (beneficiaryCheck.getStatus().equals(Status.PENDING))) {
+			beneficiaryCheck.setStatus(Status.BLOCKED);
+			manager.merge(beneficiaryCheck);
+			result = true;
+		} else {
+			throw new IBSExceptions(ExceptionMessages.BENEFICIARY_DOESNT_EXIST);
+		}
+		return result;
+	}
+
+}
+---------------------------------------------------------------------------------------------------------------------
+package com.cg.ibs.rm.service;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import javax.persistence.EntityTransaction;
+
+import org.apache.log4j.Logger;
+
+import com.cg.ibs.rm.bean.AutoPayment;
+import com.cg.ibs.rm.bean.ServiceProvider;
+import com.cg.ibs.rm.dao.AutoPaymentDAO;
+import com.cg.ibs.rm.dao.AutoPaymentDAOImpl;
+import com.cg.ibs.rm.exception.IBSExceptions;
+import com.cg.ibs.rm.util.JpaUtil;
+
+public class AutoPaymentServiceImpl implements AutoPaymentService {
+	private AutoPaymentDAO autoPaymentDao = new AutoPaymentDAOImpl();
+	private static final Logger LOGGER = Logger.getLogger(AutoPaymentServiceImpl.class.getName());
+
+	@Override
+	public Set<AutoPayment> showAutopaymentDetails(BigInteger uci) {
+		LOGGER.info("entered showAutopaymentDetails in autopaymentservimpl");
+		return autoPaymentDao.getAutopaymentDetails(uci);
+
+	}
+
+	@Override
+	public Set<ServiceProvider> showIBSServiceProviders() {
+		LOGGER.info("entered  showIBSServiceProviders in autopaymentservimpl");
+		return autoPaymentDao.showServiceProviderList();
+
+	}
+
+	@Override
+	public boolean autoDeduction(BigInteger uci, BigInteger accountNumber, AutoPayment autoPayment)
+			throws IBSExceptions {
+		LOGGER.info("entered  autodeduction in autopaymentservimpl");
+		EntityTransaction transaction = JpaUtil.getTransaction();
+		LocalDate today = LocalDate.now();
+		boolean validAutoDeduct = false;
+		LOGGER.debug(autoPaymentDao.getCurrentBalance(accountNumber));
+		if (Pattern.matches("^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/((?:[0-9]{2})?[0-9]{2})$", autoPayment.getDateOfStart())) {
+			DateTimeFormatter dtFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+			LocalDate startOfAutoPayment = LocalDate.parse(autoPayment.getDateOfStart(), dtFormatter);
+			if (!transaction.isActive()) {
+				transaction.begin();
+			}
+			if (!startOfAutoPayment.isBefore(today)) {
+				autoPaymentDao.copyDetails(uci, autoPayment);
+				if (today.equals(startOfAutoPayment)
+						&& (0 <= autoPaymentDao.getCurrentBalance(accountNumber).compareTo(autoPayment.getAmount()))) {
+					BigDecimal balance = autoPaymentDao.getCurrentBalance(accountNumber)
+							.subtract(autoPayment.getAmount());
+					autoPaymentDao.setCurrentBalance(balance, accountNumber);
+					startOfAutoPayment.plusMonths(1);
+					LOGGER.debug(autoPaymentDao.getCurrentBalance(accountNumber));
+					
+				}
+				validAutoDeduct = true;
+			}
+			transaction.commit();
+		}
+		
+		return validAutoDeduct;
+	}
+
+	@Override
+	public boolean updateRequirements(BigInteger uci, BigInteger spi) throws IBSExceptions {
+		boolean result = false;
+		LOGGER.info("entered updateRequirements in autopaymentservimpl");
+		EntityTransaction transaction = JpaUtil.getTransaction();
+		if (!transaction.isActive()) {
+			transaction.begin();
+		}
+		result = autoPaymentDao.deleteDetails(uci, spi);
+		transaction.commit();
+		return result;
+	}
+
+}
